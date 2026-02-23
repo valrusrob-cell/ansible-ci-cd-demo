@@ -1,0 +1,8 @@
+[webservers]
+192.168.3.47
+
+[all:vars]
+ansible_user=ruslan
+ansible_python_interpreter=/usr/bin/python3
+ansible_become=yes
+ansible_become_method=sudo

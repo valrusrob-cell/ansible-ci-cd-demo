@@ -49,4 +49,4 @@ jobs:
           ANSIBLE_HOST_KEY_CHECKING: "False"   # Set to False if known_hosts is not provided
           ANSIBLE_TIMEOUT: "30"
         run: |
-          ansible-playbook -i hosts ansible-project/deploy.yml -v
+          ansible-playbook -i hosts deploy.yml -v

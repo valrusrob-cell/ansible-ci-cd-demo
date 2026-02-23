@@ -1,0 +1,36 @@
+---
+- name: Remove all Docker repository files
+  become: yes
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apt/sources.list.d/docker.list
+    - /etc/apt/sources.list.d/docker-ce.list
+    - /etc/apt/sources.list.d/download_docker_com_linux_ubuntu.list
+  ignore_errors: yes
+
+- name: Remove all Docker keyrings
+  become: yes
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apt/keyrings/docker.asc
+    - /etc/apt/keyrings/docker.gpg
+    - /usr/share/keyrings/docker-archive-keyring.gpg
+    - /etc/apt/trusted.gpg.d/docker.gpg
+    - /etc/apt/trusted.gpg.d/docker.asc
+  ignore_errors: yes
+
+- name: Clean apt cache
+  become: yes
+  command: apt-get clean
+  changed_when: false
+
+- name: Update apt cache after cleanup
+  become: yes
+  apt:
+    update_cache: yes
+    force_apt_get: yes
+  changed_when: false
