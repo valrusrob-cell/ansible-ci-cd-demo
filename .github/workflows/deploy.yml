@@ -8,33 +8,68 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-      
-    - name: Install SSH key
-      uses: shimataro/ssh-key-action@v2
-      with:
-        key: ${{ secrets.SSH_PRIVATE_KEY }}
-        known_hosts: ${{ secrets.KNOWN_HOSTS }}
-        
-    - name: Install Ansible
-      run: |
-        sudo apt update
-        sudo apt install -y ansible
-        
-    - name: Create inventory file
-      run: |
-        echo "[webservers]" > inventory
-        echo "${{ secrets.HOST_IP }}" >> inventory
-        echo "" >> inventory
-        echo "[all:vars]" >> inventory
-        echo "ansible_user=${{ secrets.ANSIBLE_USER }}" >> inventory
-        echo "ansible_python_interpreter=/usr/bin/python3" >> inventory
-        
-    - name: Run Ansible playbook
-      run: |
-        # Исправлено: inventory файл называется "inventory", а не "hosts"
-        # Исправлено: путь к плэйбуку с учетом структуры репозитория
-        ansible-playbook -i inventory ansible-project/deploy.yml -v
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python (for Ansible)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies (Ansible)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "ansible==6.0.0"
+          python -m pip install "paramiko>=2.10"
+
+      - name: Install SSH key
+        uses: shimataro/ssh-key-action@v2
+        with:
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          known_hosts: ${{ secrets.KNOWN_HOSTS }}
+
+      - name: Create inventory file
+        run: |
+          set -euo pipefail
+          mkdir -p inventory_dir
+          INVENTORY_FILE="inventory_dir/inventory"
+          echo "[webservers]" > "$INVENTORY_FILE"
+          echo "${{ secrets.HOST_IP }}" >> "$INVENTORY_FILE"
+          echo "" >> "$INVENTORY_FILE"
+          echo "[all:vars]" >> "$INVENTORY_FILE"
+          echo "ansible_user=${{ secrets.ANSIBLE_USER }}" >> "$INVENTORY_FILE"
+          echo "ansible_python_interpreter=/usr/bin/python3" >> "$INVENTORY_FILE"
+          echo "Inventory created at: $INVENTORY_FILE"
+          echo "INVENTORY_PATH=$INVENTORY_FILE" >> "$GITHUB_ENV"
+
+      - name: Show inventory and paths (debug)
+        run: |
+          echo "PWD: $(pwd)"
+          ls -la
+          echo "Current directory structure:"
+          find . -type f -name "*.yml" -o -name "*.yaml" | head -20
+          echo "Inventory content:"
+          cat "${{ env.INVENTORY_PATH }}"
+
+      - name: Run Ansible playbook
+        run: |
+          set -euo pipefail
+          INVENTORY="${{ env.INVENTORY_PATH }}"
+          PLAYBOOK="deploy.yml"  # Исправленный путь!
+          
+          if [ ! -f "$PLAYBOOK" ]; then
+            echo "ERROR: Playbook not found at $PLAYBOOK"
+            echo "Searching for playbook files..."
+            find . -name "*.yml" -o -name "*.yaml" | grep -v "inventory"
+            exit 1
+          fi
+          
+          if [ ! -f "$INVENTORY" ]; then
+            echo "ERROR: Inventory file not found at $INVENTORY"
+            exit 1
+          fi
+          
+          echo "Running: ansible-playbook -i $INVENTORY $PLAYBOOK -vv"
+          ansible-playbook -i "$INVENTORY" "$PLAYBOOK" -vv
