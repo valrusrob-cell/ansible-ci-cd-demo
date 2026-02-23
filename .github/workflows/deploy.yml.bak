@@ -1,0 +1,120 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "ansible==6.0.0"
+          python -m pip install "paramiko>=2.10"
+
+      - name: Install SSH key
+        uses: shimataro/ssh-key-action@v2
+        with:
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          known_hosts: ${{ secrets.KNOWN_HOSTS }}
+          if_key_missing: fail  # Лучше fail, чем warn
+
+      - name: Test SSH connection
+        run: |
+          echo "?? Testing SSH connection to ${{ secrets.HOST_IP }}"
+          echo "User: ${{ secrets.ANSIBLE_USER }}"
+          
+          ssh -o StrictHostKeyChecking=no \
+              -o ConnectTimeout=30 \
+              -o ServerAliveInterval=30 \
+              ${{ secrets.ANSIBLE_USER }}@${{ secrets.HOST_IP }} \
+              "echo '? SSH connection successful'"
+        # Убрано continue-on-error: true - лучше остановиться при ошибке
+
+      - name: Create inventory file
+        run: |
+          set -euo pipefail
+          mkdir -p inventory_dir
+          INVENTORY_FILE="inventory_dir/inventory"
+          
+          # Убрано дублирование ansible_user
+          cat > "$INVENTORY_FILE" << EOF
+          [webservers]
+          ${{ secrets.HOST_IP }} ansible_ssh_common_args='-o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=60'
+          
+          [all:vars]
+          ansible_user=${{ secrets.ANSIBLE_USER }}
+          ansible_python_interpreter=/usr/bin/python3
+          ansible_ssh_retries=3
+          ansible_timeout=30
+          EOF
+          
+          echo "INVENTORY_PATH=$INVENTORY_FILE" >> "$GITHUB_ENV"
+          echo "? Inventory created:"
+          cat "$INVENTORY_FILE"
+
+      - name: Debug information
+        run: |
+          echo "?? Working directory: $(pwd)"
+          echo "?? Files:"
+          ls -la
+          echo "?? Playbook location:"
+          find . -path "*/ansible-project/deploy.yml" || echo "?? Playbook not found"
+          echo "?? Ansible version:"
+          ansible --version | head -3
+
+      - name: Run Ansible playbook
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"
+          ANSIBLE_TIMEOUT: "60"
+          ANSIBLE_SSH_RETRIES: "3"
+          ANSIBLE_DEPRECATION_WARNINGS: "False"
+        run: |
+          set -euo pipefail
+          
+          INVENTORY="${{ env.INVENTORY_PATH }}"
+          PLAYBOOK="ansible-project/deploy.yml"
+          
+          # Проверка наличия файлов
+          if [ ! -f "$PLAYBOOK" ]; then
+            echo "? Playbook not found: $PLAYBOOK"
+            exit 1
+          fi
+          
+          echo "?? Running: ansible-playbook -i $INVENTORY $PLAYBOOK"
+          echo "----------------------------------------"
+          
+          # Запуск playbook
+          ansible-playbook -i "$INVENTORY" "$PLAYBOOK" -v
+          
+          echo "? Playbook completed"
+
+      - name: Post-deployment verification
+        if: success()
+        run: |
+          echo "? Deployment successful!"
+          
+          # Проверка доступности сервера после деплоя
+          echo "?? Checking server availability..."
+          ssh -o StrictHostKeyChecking=no \
+              -o ConnectTimeout=10 \
+              ${{ secrets.ANSIBLE_USER }}@${{ secrets.HOST_IP }} \
+              "uptime && docker ps 2>/dev/null || echo 'Docker not available'"
+          
+          # Проверка HTTP/HTTPS (выбираем правильный протокол)
+          echo "?? Checking web server..."
+          curl -I -m 5 -k "https://${{ secrets.HOST_IP }}" 2>/dev/null || \
+          curl -I -m 5 "http://${{ secrets.HOST_IP }}" 2>/dev/null || \
+          echo "?? Web server not responding"
