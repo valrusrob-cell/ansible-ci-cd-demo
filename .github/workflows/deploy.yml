@@ -57,7 +57,7 @@ jobs:
         run: |
           set -euo pipefail
           INVENTORY="${{ env.INVENTORY_PATH }}"
-          PLAYBOOK="deploy.yml"  # Исправленный путь!
+          PLAYBOOK="ansible-project/deploy.yml"  # ИСПРАВЛЕНО: добавлен путь к папке ansible-project
           
           if [ ! -f "$PLAYBOOK" ]; then
             echo "ERROR: Playbook not found at $PLAYBOOK"
