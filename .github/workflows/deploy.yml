@@ -35,4 +35,6 @@ jobs:
         
     - name: Run Ansible playbook
       run: |
-        ansible-playbook -i hosts ansible-project/deploy.yml -v
+        # Исправлено: inventory файл называется "inventory", а не "hosts"
+        # Исправлено: путь к плэйбуку с учетом структуры репозитория
+        ansible-playbook -i inventory ansible-project/deploy.yml -v
