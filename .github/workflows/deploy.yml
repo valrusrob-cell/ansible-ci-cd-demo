@@ -1,0 +1,38 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:  # Возможность ручного запуска
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Install SSH key
+      uses: shimataro/ssh-key-action@v2
+      with:
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        known_hosts: ${{ secrets.KNOWN_HOSTS }}
+        
+    - name: Install Ansible
+      run: |
+        sudo apt update
+        sudo apt install -y ansible
+        
+    - name: Create inventory file
+      run: |
+        echo "[webservers]" > inventory
+        echo "${{ secrets.HOST_IP }}" >> inventory
+        echo "" >> inventory
+        echo "[all:vars]" >> inventory
+        echo "ansible_user=${{ secrets.ANSIBLE_USER }}" >> inventory
+        echo "ansible_python_interpreter=/usr/bin/python3" >> inventory
+        
+    - name: Run Ansible playbook
+      run: |
+        ansible-playbook -i inventory deploy.yml
