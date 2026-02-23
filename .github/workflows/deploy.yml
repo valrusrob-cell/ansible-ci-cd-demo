@@ -29,45 +29,134 @@ jobs:
         with:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           known_hosts: ${{ secrets.KNOWN_HOSTS }}
+          if_key_missing: fail
 
-      - name: Test SSH connection
+      - name: Complete Network and SSH Diagnostics
         run: |
-          echo "Testing SSH connection to ${{ secrets.HOST_IP }}"
-          ssh -o StrictHostKeyChecking=no \
-              -o ConnectTimeout=30 \
-              ${{ secrets.ANSIBLE_USER }}@${{ secrets.HOST_IP }} \
-              "echo 'SSH connection successful'"
+          echo "?? COMPLETE NETWORK DIAGNOSTICS"
+          echo "================================"
+          HOST="${{ secrets.HOST_IP }}"
+          USER="${{ secrets.ANSIBLE_USER }}"
+          
+          # 1. Basic connectivity
+          echo -e "\n?? 1. BASIC CONNECTIVITY"
+          echo "Host: $HOST"
+          echo "User: $USER"
+          
+          # 2. DNS/Name resolution
+          echo -e "\n?? 2. DNS RESOLUTION"
+          getent hosts $HOST || echo "? Cannot resolve hostname"
+          
+          # 3. ICMP/Ping
+          echo -e "\n?? 3. PING TEST"
+          ping -c 3 -W 3 $HOST && echo "? Ping OK" || echo "? Ping failed (may be blocked)"
+          
+          # 4. Port scan
+          echo -e "\n?? 4. PORT SCAN"
+          for port in 22 2222 8022; do
+            timeout 3 nc -zv $HOST $port 2>&1 && echo "? Port $port is open" || echo "? Port $port is closed"
+          done
+          
+          # 5. Detailed port check
+          echo -e "\n?? 5. DETAILED PORT 22 CHECK"
+          timeout 5 nc -v -w 3 $HOST 22 2>&1 || echo "? Port 22 not accessible"
+          
+          # 6. SSH version check
+          echo -e "\n?? 6. SSH BANNER"
+          timeout 5 nc -v -w 3 $HOST 22 2>&1 | head -3 || echo "? No SSH banner received"
+          
+          # 7. SSH verbose attempt
+          echo -e "\n?? 7. SSH VERBOSE ATTEMPT"
+          timeout 15 ssh -vvv \
+            -o ConnectTimeout=5 \
+            -o StrictHostKeyChecking=no \
+            -o BatchMode=yes \
+            $USER@$HOST "exit" 2>&1 || echo "? SSH connection failed"
+          
+          # 8. Try with different authentication methods
+          echo -e "\n?? 8. ALTERNATIVE SSH METHODS"
+          echo "Attempting with password authentication disabled:"
+          timeout 10 ssh -o PreferredAuthentications=publickey \
+            -o ConnectTimeout=5 \
+            -o StrictHostKeyChecking=no \
+            -v $USER@$HOST "echo OK" 2>&1 || echo "? Public key auth failed"
+          
+          # 9. Check GitHub Actions IP
+          echo -e "\n?? 9. GITHUB ACTIONS IP"
+          curl -s ifconfig.me && echo " - Current runner IP" || echo "Cannot get IP"
+          
+          # 10. MTR-like trace
+          echo -e "\n??? 10. NETWORK PATH"
+          if command -v mtr &> /dev/null; then
+            mtr -r -c 3 -n $HOST || echo "MTR failed"
+          else
+            traceroute -m 10 -w 2 $HOST || echo "Traceroute failed"
+          fi
+        continue-on-error: true
 
-      - name: Create inventory file
+      - name: Test with different SSH ports
+        run: |
+          echo "?? Testing alternative SSH ports..."
+          HOST="${{ secrets.HOST_IP }}"
+          USER="${{ secrets.ANSIBLE_USER }}"
+          
+          # Try common SSH ports
+          for port in 22 2222 2022 8022; do
+            echo -n "Port $port: "
+            timeout 5 ssh -p $port \
+              -o ConnectTimeout=5 \
+              -o StrictHostKeyChecking=no \
+              -o BatchMode=yes \
+              $USER@$HOST "echo Connected on port $port" 2>/dev/null && echo "? SUCCESS" || echo "? Failed"
+          done
+
+      - name: Create inventory file with dynamic port
         run: |
           set -euo pipefail
           mkdir -p inventory_dir
           INVENTORY_FILE="inventory_dir/inventory"
+          
+          # Try to detect SSH port
+          SSH_PORT=22
+          for port in 22 2222 2022 8022; do
+            if timeout 3 nc -zv ${{ secrets.HOST_IP }} $port 2>&1 | grep -q succeeded; then
+              SSH_PORT=$port
+              echo "? Found SSH on port $port"
+              break
+            fi
+          done
+          
+          # Create inventory with detected port
           cat > "$INVENTORY_FILE" << EOF
           [webservers]
-          ${{ secrets.HOST_IP }} ansible_ssh_common_args='-o StrictHostKeyChecking=no -o ConnectTimeout=30'
+          ${{ secrets.HOST_IP }} ansible_port=$SSH_PORT
           
           [all:vars]
           ansible_user=${{ secrets.ANSIBLE_USER }}
           ansible_python_interpreter=/usr/bin/python3
-          ansible_ssh_retries=3
+          ansible_ssh_common_args='-o ConnectTimeout=30 -o ServerAliveInterval=60 -o ConnectionAttempts=5'
+          ansible_ssh_retries=5
+          ansible_timeout=60
           EOF
+          
           echo "INVENTORY_PATH=$INVENTORY_FILE" >> $GITHUB_ENV
+          echo "? Inventory created with SSH port: $SSH_PORT"
+          cat "$INVENTORY_FILE"
 
       - name: Run Ansible playbook
         env:
           ANSIBLE_HOST_KEY_CHECKING: "False"
-          ANSIBLE_TIMEOUT: "60"
-          ANSIBLE_SSH_RETRIES: "3"
+          ANSIBLE_TIMEOUT: "120"
+          ANSIBLE_SSH_RETRIES: "5"
+          ANSIBLE_SSH_PIPELINING: "True"
         run: |
           set -euo pipefail
+          
+          echo "?? Running Ansible playbook..."
+          echo "Using inventory: ${{ env.INVENTORY_PATH }}"
+          echo "----------------------------------------"
+          
           ansible-playbook -i "${{ env.INVENTORY_PATH }}" \
-            ansible-project/deploy.yml -v
-
-      - name: Post-deployment verification
-        if: success()
-        run: |
-          echo "Deployment successful!"
-          ssh -o StrictHostKeyChecking=no \
-              ${{ secrets.ANSIBLE_USER }}@${{ secrets.HOST_IP }} \
-              "uptime && docker ps 2>/dev/null || echo 'Docker not available'"
+            ansible-project/deploy.yml \
+            -vvv \
+            --timeout=120
