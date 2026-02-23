@@ -1,0 +1,41 @@
+---
+- name: Setup Docker and deploy application
+  hosts: webservers
+  become: no
+  vars:
+    ansible_user: ruslan
+    
+  pre_tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      become: yes
+      tags:
+        - always
+
+  roles:
+    - docker-setup
+    - app-deploy
+
+  post_tasks:
+    - name: Check if application is running
+      become: yes
+      become_user: "{{ ansible_user }}"
+      environment:
+        PATH: "/home/{{ ansible_user }}/.local/bin:/usr/local/bin:/usr/bin:/bin"
+      uri:
+        url: "http://localhost:5000"
+        method: GET
+        status_code: 200
+      register: app_check
+      ignore_errors: yes
+      tags:
+        - check
+
+    - name: Display application status
+      debug:
+        msg: 
+          - "Application is {% if app_check is succeeded %}UP{% else %}DOWN{% endif %}"
+          - "URL: http://{{ inventory_hostname }}:5000"
+      when: app_check is defined

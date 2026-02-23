@@ -1,0 +1,76 @@
+---
+- name: Create app directory
+  file:
+    path: /opt/flask-app
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  become: yes
+
+- name: Clone/pull latest code from GitHub
+  git:
+    repo: 'https://github.com/valrusrob-cell/ansible-ci-cd-demo.git'
+    dest: /opt/flask-app
+    version: main
+    update: yes
+    force: yes
+  become: yes
+  become_user: "{{ ansible_user }}"
+
+- name: Build Docker image
+  become: yes
+  become_user: "{{ ansible_user }}"
+  shell: |
+    cd /opt/flask-app
+    docker build -t flask-app:latest .
+  args:
+    executable: /bin/bash
+  register: build_result
+  changed_when: "'Successfully built' in build_result.stdout"
+
+- name: Stop and remove existing container
+  become: yes
+  become_user: "{{ ansible_user }}"
+  shell: |
+    docker stop flask-app || true
+    docker rm flask-app || true
+  args:
+    executable: /bin/bash
+  register: stop_result
+  changed_when: false
+  ignore_errors: yes
+
+- name: Run new container
+  become: yes
+  become_user: "{{ ansible_user }}"
+  shell: |
+    docker run -d \
+      --name flask-app \
+      -p 5000:5000 \
+      --restart always \
+      flask-app:latest
+  args:
+    executable: /bin/bash
+  register: run_result
+  changed_when: run_result.rc == 0
+
+- name: Wait for container to be ready
+  become: yes
+  become_user: "{{ ansible_user }}"
+  shell: |
+    sleep 5
+    docker ps | grep flask-app
+  args:
+    executable: /bin/bash
+  register: container_check
+  changed_when: false
+  ignore_errors: yes
+
+- name: Display deployment status
+  debug:
+    msg:
+      - "Deployment completed!"
+      - "Container status: {{ 'Running' if container_check is succeeded else 'Failed' }}"
+      - "Application URL: http://{{ ansible_host }}:5000"
+      - "To check logs: docker logs flask-app"
